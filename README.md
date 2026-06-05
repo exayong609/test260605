@@ -92,10 +92,10 @@ npm run smoke
 
 `npm run smoke` 会检查首页可达、`/api/health`、默认规则模板、真实 demo 解析、多 Sheet、周计划矩阵、卡片式调拨、1000 行性能、Excel 导出、提交下单和历史查询。
 
-最近一次本地压测结果：1000 行标准 Excel 解析为 1000 行，规则执行约 12ms，规则生成接口往返约 110ms，解析接口往返约 96ms，不含 AI 时间。
+最近一次本地压测结果：1000 行标准 Excel 解析为 1000 行，规则执行约 16ms，规则生成接口往返约 146ms，解析接口往返约 108ms，不含 AI 时间。
 
 ## 提交清单
 
-- 在线地址：部署 Vercel 后填写。
-- 源码仓库：推送仓库后填写。
+- 在线地址：https://aitest-murex.vercel.app
+- 源码仓库：https://github.com/exayong609/test260605
 - 大模型说明：见本 README 和 `docs/ai-and-rules.md`。

@@ -12,3 +12,5 @@ data/*.png
 tsconfig.tsbuildinfo
 .vercel
 .DS_Store
+AI考试附件/
+~$*

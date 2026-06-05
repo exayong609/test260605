@@ -81,7 +81,7 @@ function inferKeyValueCellMappings(sheet: GridSheet) {
 
   sheet.rows.forEach((row, rowIndex) => {
     row.forEach((cell, columnIndex) => {
-      const normalized = cell.replace(/\s/g, "");
+      const normalized = cell.replace(/\s/g, "").replace(/[：:]+$/, "");
       const match = labelMatchers.find(([field, pattern]) => !used.has(field) && pattern.test(normalized));
       if (!match) return;
       const valueColumnIndex = row.findIndex((candidate, candidateIndex) => candidateIndex > columnIndex && Boolean(candidate.trim()));
@@ -152,6 +152,30 @@ export function inferRuleFromDocument(document: IntermediateDocument): ParsingRu
   const firstSheet = document.sheets[0];
 
   if (document.sourceKind === "excel" && firstSheet) {
+    if (/调拨记录|调拨单号|调入门店/.test(document.text)) {
+      return {
+        id: makeId("rule"),
+        name: `${document.fileName} 推荐卡片规则`,
+        description: "本地分析识别为卡片式调拨结构，按调拨记录分段后提取每段收货信息和物品行。",
+        sourceKind: "excel",
+        layout: "cards",
+        createdAt: now,
+        updatedAt: now,
+        aiGenerated: false,
+        confidence: 0.74,
+        assumptions: ["每个“调拨记录”视为一个收货区块。", "区块内物品行需要包含物品编码、名称、规格和数量。"],
+        sectionStartPattern: "调拨记录",
+        itemLinePattern: "(?:\\d+[\\.、)]\\s*)?([A-Za-z0-9_-]{2,})\\s*[|｜\\s]+([^|｜\\n]+?)\\s*[|｜\\s]+(?:([^|｜\\n]+?)\\s*[|｜\\s]+)?(\\d+(?:\\.\\d+)?)",
+        mappings: [
+          { kind: "regex", field: "externalCode", pattern: "(?:调拨单号|单号)[:：\\s]*([A-Za-z0-9_-]+)", group: 1, scope: "document" },
+          { kind: "regex", field: "storeName", pattern: "调入门店\\s*(?:\\|\\s*)?\\[?\\d*\\]?\\s*([^|\\n]+)", group: 1, scope: "section" },
+          { kind: "regex", field: "recipientName", pattern: "收货人\\s*(?:\\|\\s*)?\\[?\\d*\\]?\\s*([^|\\n]+)", group: 1, scope: "section" },
+          { kind: "regex", field: "recipientPhone", pattern: "电话\\s*(?:\\|\\s*)?([0-9\\-\\s]{7,20})", group: 1, scope: "section" },
+          { kind: "regex", field: "recipientAddress", pattern: "收货地址\\s*(?:\\|\\s*)?\\[?\\d*\\]?\\s*([^|\\n]+)", group: 1, scope: "section" }
+        ]
+      };
+    }
+
     const header = findHeader(firstSheet);
     const matrix = inferMatrix(firstSheet, header);
     const tailMappings = inferTailRegexMappings(document.text);

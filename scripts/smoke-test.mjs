@@ -68,7 +68,7 @@ async function checkDefaultRules() {
 async function checkDemoParsing() {
   const demosDir = path.join(process.cwd(), "demos");
   const files = fs.existsSync(demosDir)
-    ? fs.readdirSync(demosDir).filter((file) => /\.(xlsx|xls|pdf|docx)$/i.test(file))
+    ? fs.readdirSync(demosDir).filter((file) => /\.(xlsx|xls|pdf|docx)$/i.test(file) && !file.startsWith("~$"))
     : [];
   assert(files.length > 0, "No demo files found");
 

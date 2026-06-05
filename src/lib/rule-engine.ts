@@ -28,12 +28,17 @@ function findColumnByHeader(sheet: GridSheet, headerRowIndex: number, mapping: F
   if (mapping.columnIndex !== undefined) return mapping.columnIndex;
   const header = mapping.header;
   const row = sheet.rows[headerRowIndex] || [];
+  const normalizedRow = row.map((cell) => normalize(cell));
   if (header) {
-    const index = row.findIndex((cell) => normalize(cell).includes(header));
-    if (index >= 0) return index;
+    const exactIndex = normalizedRow.findIndex((cell) => cell === header);
+    if (exactIndex >= 0) return exactIndex;
+    const partialIndex = normalizedRow.findIndex((cell) => cell.includes(header));
+    if (partialIndex >= 0) return partialIndex;
   }
   const hints = FIELD_HINTS[mapping.field];
-  return row.findIndex((cell) => hints.some((hint) => normalize(cell).includes(hint)));
+  const exactHintIndex = normalizedRow.findIndex((cell) => hints.some((hint) => cell === hint));
+  if (exactHintIndex >= 0) return exactHintIndex;
+  return normalizedRow.findIndex((cell) => hints.some((hint) => cell.includes(hint)));
 }
 
 function getRegexValue(mapping: Extract<FieldMapping, { kind: "regex" }>, documentText: string, sectionText?: string) {
@@ -168,7 +173,11 @@ function splitCompoundCell(value: string) {
 }
 
 function stripDocumentLinePrefix(line: string) {
-  return line.replace(/^\s*\d+:\s*(?:\[\d+\])?/, "").trim();
+  return line
+    .replace(/^\s*\d+:\s*/, "")
+    .replace(/\s*\[\d+\]\s*/g, " ")
+    .replace(/\s*\|\s*/g, " | ")
+    .trim();
 }
 
 function splitTextSections(documentText: string, rule: ParsingRule) {
@@ -255,14 +264,15 @@ function parseTextBlocks(document: IntermediateDocument, rule: ParsingRule) {
   let outputRow = 1;
 
   sections.forEach((section, sectionIndex) => {
+    const cleanedSection = section.split(/\n/).map(stripDocumentLinePrefix).join("\n");
     const baseDraft: RowDraft = { sourceSection: `区块 ${sectionIndex + 1}` };
     applyCommonMappings(baseDraft, rule.mappings, {
       documentText: document.text,
-      sectionText: section
+      sectionText: cleanedSection
     });
 
     let foundItem = false;
-    const itemLines = section.split(/\n/).map(stripDocumentLinePrefix).filter(Boolean);
+    const itemLines = cleanedSection.split(/\n/).map((line) => line.trim()).filter(Boolean);
     itemLines.forEach((line) => {
       const match = line.match(itemRegex);
       if (!match) return;
@@ -281,8 +291,8 @@ function parseTextBlocks(document: IntermediateDocument, rule: ParsingRule) {
       }
     });
 
-    if (!foundItem && /编码|名称|数量/.test(section)) {
-      const lines = section.split(/\n/).map((line) => line.trim()).filter(Boolean);
+    if (!foundItem && /编码|名称|数量/.test(cleanedSection)) {
+      const lines = cleanedSection.split(/\n/).map((line) => line.trim()).filter(Boolean);
       lines.forEach((line) => {
         const fallback = line.match(/([A-Za-z0-9_-]{2,}).*?([\u4e00-\u9fa5A-Za-z][^0-9|｜]*).*?(\d+(?:\.\d+)?)/);
         if (!fallback) return;
