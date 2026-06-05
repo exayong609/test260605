@@ -9,7 +9,9 @@ type LocalStore = {
   orders: OrderGroup[];
 };
 
-const storePath = path.join(process.cwd(), "data", "local-store.json");
+const storePath = process.env.VERCEL
+  ? path.join("/tmp", "universal-order-importer-store.json")
+  : path.join(process.cwd(), "data", "local-store.json");
 
 let sqlClient: ReturnType<typeof postgres> | null = null;
 
