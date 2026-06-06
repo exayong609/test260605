@@ -18,8 +18,8 @@ let sqlClient: ReturnType<typeof postgres> | null = null;
 let schemaReady: Promise<void> | null = null;
 
 function withDefaultRules(rules: ParsingRule[]) {
-  const seen = new Set(rules.map((rule) => rule.id));
-  return [...rules, ...DEFAULT_RULES.filter((rule) => !seen.has(rule.id))];
+  const defaultIds = new Set(DEFAULT_RULES.map((rule) => rule.id));
+  return [...rules.filter((rule) => !defaultIds.has(rule.id)), ...DEFAULT_RULES.map((rule) => ({ ...rule, builtIn: true }))];
 }
 
 function getSql() {
@@ -314,6 +314,13 @@ export async function deleteRule(id: string) {
   const store = await readLocal();
   store.rules = store.rules.filter((rule) => rule.id !== id);
   await writeLocal(store);
+}
+
+export async function restoreDefaultRule(id: string) {
+  const defaultRule = DEFAULT_RULES.find((rule) => rule.id === id);
+  if (!defaultRule) throw new Error("只能恢复内置规则。");
+  await deleteRule(id);
+  return { ...defaultRule, builtIn: true };
 }
 
 export async function listOrders(params: { query?: string; from?: string; to?: string; page?: number; pageSize?: number }) {

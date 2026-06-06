@@ -1567,11 +1567,11 @@ textarea:focus {
 }
 
 .importer-app .data-table {
-  min-width: 1360px;
+  min-width: 1800px;
 }
 
 .importer-app .table-row {
-  grid-template-columns: 54px 140px 132px 132px 150px 220px 132px 160px 116px 132px 180px 60px;
+  grid-template-columns: 54px 140px 180px 132px 150px 360px 132px 160px 116px 132px 180px 60px;
 }
 
 .importer-app .table-header {
@@ -2664,6 +2664,16 @@ textarea:focus {
   font-weight: 600;
 }
 
+.rule-select-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+}
+
+.rule-select-row button {
+  white-space: nowrap;
+}
+
 .rule-config-body .json-box .rule-editor {
   min-height: 430px;
 }
@@ -3059,7 +3069,7 @@ textarea:focus {
 .history-table-row {
   display: grid;
   flex: 0 0 auto;
-  grid-template-columns: 1.3fr 1fr 1fr 130px 72px 160px 100px;
+  grid-template-columns: minmax(170px, 1.15fr) minmax(210px, 1.35fr) minmax(110px, 0.8fr) 130px 72px 160px 100px;
   min-height: 42px;
   align-items: center;
   border-bottom: 1px solid #edf2f7;

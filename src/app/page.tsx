@@ -13,6 +13,7 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  RotateCcw,
   Save,
   Search,
   Send,
@@ -84,10 +85,10 @@ const profileRequiredFields: ProfileRequiredField[] = ["name", "baseUrl", "apiKe
 const DEFAULT_PREVIEW_COLUMN_WIDTHS: PreviewColumnWidths = {
   rowIndex: 54,
   externalCode: 140,
-  storeName: 132,
+  storeName: 180,
   recipientName: 132,
   recipientPhone: 150,
-  recipientAddress: 220,
+  recipientAddress: 360,
   skuCode: 132,
   skuName: 160,
   skuQuantity: 116,
@@ -172,7 +173,7 @@ function parseRuleDraft(ruleDraft: string) {
 }
 
 function stringifyRuleDraft(rule: Partial<ParsingRule>) {
-  const { generationPrompt: _generationPrompt, ...visibleRule } = rule;
+  const { builtIn: _builtIn, generationPrompt: _generationPrompt, ...visibleRule } = rule;
   return JSON.stringify(visibleRule, null, 2);
 }
 
@@ -288,6 +289,7 @@ export default function Home() {
   const selectedRule = useMemo(() => rules.find((rule) => rule.id === selectedRuleId), [rules, selectedRuleId]);
   const selectedProfile = useMemo(() => llmProfiles.find((profile) => profile.id === selectedProfileId), [llmProfiles, selectedProfileId]);
   const ruleSummary = useMemo(() => parseRuleDraft(ruleDraft), [ruleDraft]);
+  const selectedRuleIsBuiltIn = Boolean(selectedRule?.builtIn);
   const hasExecutableRule = Boolean(ruleSummary?.mappings?.length);
   const clientIssues = useMemo(() => validateRows(rows), [rows]);
   const persistentServerIssues = serverIssues.filter((issue) => issue.id.includes("external_duplicate_existing"));
@@ -600,17 +602,20 @@ export default function Home() {
     try {
       setRuleActionNotice("正在保存规则模板...");
       const parsed = JSON.parse(ruleDraft) as ParsingRule;
+      const normalizedRule = selectedRuleIsBuiltIn
+        ? { ...parsed, id: makeId("rule"), name: `${parsed.name} 自定义副本`, createdAt: nowIso(), updatedAt: nowIso(), builtIn: undefined }
+        : { ...parsed, builtIn: undefined };
       const response = await fetch("/api/rules", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ ...parsed, generationPrompt: aiPromptDraft || DEFAULT_LLM_PROMPT })
+        body: JSON.stringify({ ...normalizedRule, generationPrompt: aiPromptDraft || DEFAULT_LLM_PROMPT })
       });
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "保存规则失败");
       await loadRules();
       setSelectedRuleId(data.rule.id);
-      setRuleActionNotice("规则模板已保存，可在主界面选择后解析全部文件。");
-      showToast("success", "规则模板已保存。");
+      setRuleActionNotice(selectedRuleIsBuiltIn ? "内置规则已另存为自定义副本，可继续微调。" : "规则模板已保存，可在主界面选择后解析全部文件。");
+      showToast("success", selectedRuleIsBuiltIn ? "已另存为自定义规则副本。" : "规则模板已保存。");
     } catch (error) {
       const message = error instanceof Error ? error.message : "规则 JSON 不合法。";
       setRuleActionNotice(`保存失败：${message}`);
@@ -620,6 +625,11 @@ export default function Home() {
 
   async function deleteCurrentRule() {
     if (!selectedRuleId) return;
+    if (selectedRuleIsBuiltIn) {
+      setRuleActionNotice("内置规则不能删除；如需回退，请使用恢复默认。");
+      showToast("info", "内置规则不能删除，可恢复默认或复制后修改。");
+      return;
+    }
     setRuleActionNotice("正在删除规则模板...");
     const response = await fetch(`/api/rules?id=${selectedRuleId}`, { method: "DELETE" });
     if (response.ok) {
@@ -629,6 +639,32 @@ export default function Home() {
       showToast("success", "规则模板已删除。");
     } else {
       setRuleActionNotice("删除失败，请稍后重试。");
+    }
+  }
+
+  async function restoreCurrentDefaultRule() {
+    if (!selectedRuleId || !selectedRuleIsBuiltIn) return;
+    try {
+      setRuleActionNotice("正在恢复内置规则默认值...");
+      setRulePreview(null);
+      const response = await fetch("/api/rules/restore", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: selectedRuleId })
+      });
+      const data = (await response.json()) as { rule?: ParsingRule; error?: string };
+      if (!response.ok || !data.rule) throw new Error(data.error || "恢复内置规则失败");
+      await loadRules();
+      setSelectedRuleId(data.rule.id);
+      setRuleDraft(stringifyRuleDraft(data.rule));
+      setAiPromptDraft(data.rule.generationPrompt || DEFAULT_LLM_PROMPT);
+      setAiProvider(null);
+      setRuleActionNotice("已恢复为系统内置调优规则，请用当前文件预解析确认。");
+      showToast("success", "已恢复内置规则默认值。");
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "恢复内置规则失败。";
+      setRuleActionNotice(`恢复失败：${message}`);
+      showToast("error", message);
     }
   }
 
@@ -1213,6 +1249,11 @@ export default function Home() {
                   <div className="importer-actions">
                     <button onClick={createNewRuleDraft} disabled={Boolean(busy)} title="新增规则草稿"><Plus size={14} /> 新增</button>
                     <button onClick={copyRule} disabled={Boolean(busy)} title="复制当前规则为草稿"><Copy size={14} /> 复制</button>
+                    {selectedRuleIsBuiltIn && (
+                      <button onClick={() => void restoreCurrentDefaultRule()} disabled={Boolean(busy)} title="恢复为系统内置调优规则">
+                        <RotateCcw size={14} /> 恢复默认
+                      </button>
+                    )}
                     <button onClick={() => void generateRule()} disabled={!file || !aiPromptDraft.trim() || !selectedProfileUsable || Boolean(busy)} title="按当前文件和提示词生成推荐规则">
                       {isGeneratingRule ? <Loader2 size={14} className="spin" /> : <Wand2 size={14} />}
                       {isGeneratingRule ? "生成中" : "AI 生成规则"}
@@ -1239,19 +1280,26 @@ export default function Home() {
                   <aside className="rule-edit-panel">
                     <label className="modal-field">
                       <span>规则模板</span>
-                      <select value={selectedRuleId} onChange={(event) => selectRule(event.target.value)}>
-                        <option value="">请选择已有规则</option>
-                        {rules.map((rule) => (
-                          <option key={rule.id} value={rule.id}>{rule.name}</option>
-                        ))}
-                      </select>
+                      <div className="rule-select-row">
+                        <select value={selectedRuleId} onChange={(event) => selectRule(event.target.value)}>
+                          <option value="">请选择已有规则</option>
+                          {rules.map((rule) => (
+                            <option key={rule.id} value={rule.id}>{rule.name}</option>
+                          ))}
+                        </select>
+                        {selectedRuleIsBuiltIn && (
+                          <button type="button" onClick={() => void restoreCurrentDefaultRule()} disabled={Boolean(busy)} title="恢复为系统内置调优规则">
+                            <RotateCcw size={14} /> 恢复默认
+                          </button>
+                        )}
+                      </div>
                     </label>
 
                     {ruleSummary && (
                       <div className="rule-summary">
                         <div className="rule-summary-head">
                           <strong>{ruleSummary.name}</strong>
-                          <span>{ruleSummary.aiGenerated ? "AI 生成" : aiProvider === "fallback" ? "本地推荐" : "规则模板"}</span>
+                          <span>{selectedRuleIsBuiltIn ? "内置规则" : ruleSummary.aiGenerated ? "AI 生成" : aiProvider === "fallback" ? "本地推荐" : "规则模板"}</span>
                         </div>
                         <div className="rule-meta-grid">
                           <span>类型：{ruleSummary.layout}</span>

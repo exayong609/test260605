@@ -13,8 +13,18 @@ function normalize(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+function cleanExtractedText(value: unknown): string {
+  return normalize(value)
+    .replace(/\s*\[\d+\]\s*/g, " ")
+    .replace(/(^|\s)\|\s*/g, " ")
+    .replace(/\s*\|\s*$/g, " ")
+    .replace(/^[|,，;；:：\s]+/, "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
 function stripAfterBusinessLabel(value: unknown, labels: string[]) {
-  let clean = normalize(value);
+  let clean = cleanExtractedText(value);
   labels.forEach((label) => {
     const index = clean.indexOf(label);
     if (index > 0) clean = clean.slice(0, index).trim();
@@ -47,7 +57,7 @@ function sanitizeFieldValue(field: OrderField, value: unknown) {
   if (field === "recipientAddress") {
     return stripAfterBusinessLabel(value, ["备注", "制单", "打印", "合计", "签字"]);
   }
-  return normalize(value);
+  return cleanExtractedText(value);
 }
 
 function toNumber(value: unknown) {
@@ -119,6 +129,12 @@ function getRegexValue(mapping: Extract<FieldMapping, { kind: "regex" }>, docume
   return normalize(match?.[mapping.group ?? 1] ?? mapping.fallback ?? "");
 }
 
+function sheetToSearchText(sheet: GridSheet) {
+  return sheet.rows
+    .map((row, rowIndex) => `${rowIndex + 1}: ${row.map((cell, index) => `[${index + 1}]${cell}`).join(" | ")}`)
+    .join("\n");
+}
+
 function applyCommonMappings(
   draft: RowDraft,
   mappings: FieldMapping[],
@@ -149,10 +165,10 @@ function applyCommonMappings(
       draft[mapping.field] = mapping.value;
     }
     if (mapping.kind === "sheetName" && context.sheet) {
-      draft[mapping.field] = context.sheet.name;
+      if (!draft[mapping.field]) draft[mapping.field] = sanitizeFieldValue(mapping.field, context.sheet.name);
     }
     if (mapping.kind === "matrixColumn" && context.matrixColumnName) {
-      draft[mapping.field] = context.matrixColumnName;
+      if (!draft[mapping.field]) draft[mapping.field] = sanitizeFieldValue(mapping.field, context.matrixColumnName);
     }
     if (mapping.kind === "compoundPart" && mapping.part === "name" && context.compoundName) {
       if (!draft[mapping.field]) draft[mapping.field] = context.compoundName;
@@ -198,6 +214,7 @@ function parseTabular(document: IntermediateDocument, rule: ParsingRule) {
     const headerRowIndex = resolveHeaderRowIndex(sheet, rule);
     const start = rule.dataStartRowIndex ?? headerRowIndex + 1;
     const end = rule.dataEndRowIndex ?? sheet.rows.length;
+    const sheetText = sheetToSearchText(sheet);
 
     for (let index = start; index < Math.min(end, sheet.rows.length); index += 1) {
       const sourceRow = sheet.rows[index];
@@ -210,7 +227,8 @@ function parseTabular(document: IntermediateDocument, rule: ParsingRule) {
         row: sourceRow,
         sheet,
         headerRowIndex,
-        documentText: document.text
+        documentText: document.text,
+        sectionText: sheetText
       });
       const parsed = toParsedRow(draft, outputRow);
       if (parsed) {
@@ -245,6 +263,7 @@ function stripDocumentLinePrefix(line: string) {
     .replace(/^\s*\d+:\s*/, "")
     .replace(/\s*\[\d+\]\s*/g, " ")
     .replace(/\s*\|\s*/g, " | ")
+    .replace(/(?:\s*\|\s*)+$/g, "")
     .trim();
 }
 
@@ -403,28 +422,42 @@ function parseNumberedTextRows(document: IntermediateDocument, rule: ParsingRule
   const lines = document.text.split(/\n/).map((line) => line.trim()).filter(Boolean);
   const merged: string[] = [];
   lines.forEach((line) => {
-    if (/^\d{1,4}\D/.test(line)) {
+    if (/^\d{1,4}[\u4e00-\u9fa5A-Za-z]/.test(line)) {
       merged.push(line);
-    } else if (merged.length && !/物品类别|第\d+页|合\s*计|制单日期|收货人签字|打印次数/.test(line)) {
+    } else if (
+      merged.length &&
+      !/物品类别|第\d+页|^合$|^计$|合\s*计|^制单日期|^创建人|^发货人|^收货人[:：]|^收货人签字|^收货电话|^收货地址|^打印次数|^备注[:：]?$|^\d+(?:\.\d+)?$/.test(line)
+    ) {
       merged[merged.length - 1] = `${merged[merged.length - 1]}${line}`;
     }
   });
 
-  merged.forEach((line, index) => {
+  let outputRow = 1;
+  merged.forEach((line) => {
     const match = line.match(/^\d{1,4}(.+?)([A-Za-z]{2,}[A-Za-z0-9_-]{2,})(.+?)(?:件|瓶|包|桶|箱|个|套|条|码|均码|L码|XL码|2XL码|3XL码|4XL码)(\d+(?:\.\d+)?)$/);
     if (!match) return;
     const nameAndSpec = normalize(match[3]);
     const specMatch = nameAndSpec.match(/(.+?)(\d+(?:\.\d+)?\s*(?:kg|KG|g|G|ml|ML|L|l|码|\*)[\s\S]*)$/);
+    let skuCode = normalize(match[2]);
+    let skuName = normalize(specMatch?.[1] || nameAndSpec);
+    const splitCode = skuCode.match(/^([A-Za-z]+[0-9]+)([A-Z])$/);
+    if (splitCode && /^[\u4e00-\u9fa5]/.test(skuName)) {
+      skuCode = splitCode[1];
+      skuName = `${splitCode[2]}${skuName}`;
+    }
     const draft: RowDraft = {
       ...baseDraft,
-      skuCode: normalize(match[2]),
-      skuName: normalize(specMatch?.[1] || nameAndSpec),
+      skuCode,
+      skuName,
       skuSpec: normalize(specMatch?.[2] || ""),
       skuQuantity: Number(match[4]),
       sourceSection: "编号文本行"
     };
-    const parsed = toParsedRow(draft, rows.length + index + 1);
-    if (parsed) rows.push(parsed);
+    const parsed = toParsedRow(draft, outputRow);
+    if (parsed) {
+      rows.push(parsed);
+      outputRow += 1;
+    }
   });
 
   return rows;

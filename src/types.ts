@@ -52,6 +52,7 @@ export type ParsingRule = {
   updatedAt: string;
   generationPrompt?: string;
   aiGenerated?: boolean;
+  builtIn?: boolean;
   confidence?: number;
   assumptions?: string[];
   sheetMode?: "first" | "all";
