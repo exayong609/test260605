@@ -12,10 +12,10 @@ export const DEFAULT_RULES: ParsingRule[] = [
     createdAt: now,
     updatedAt: now,
     confidence: 0.7,
-    assumptions: ["这是通用模板，请根据样例文件确认列号。", "合计/总计/小计行会被跳过。"],
+    assumptions: ["会在前 20 行扫描表头，请根据样例文件确认列号。", "合计/总计/小计行会被跳过。", "收货信息可从数据列或文档尾部标签提取。"],
     sheetMode: "first",
-    headerRowIndex: 0,
-    dataStartRowIndex: 1,
+    autoDetectHeader: true,
+    headerSearchRows: 20,
     stopWhenRowMatches: "合计|总计|小计",
     skipRowPatterns: ["合计", "总计", "小计", "^\\s*$"],
     groupBy: "externalCode",
@@ -29,7 +29,12 @@ export const DEFAULT_RULES: ParsingRule[] = [
       { kind: "column", field: "skuName", header: "名称" },
       { kind: "column", field: "skuQuantity", header: "数量" },
       { kind: "column", field: "skuSpec", header: "规格" },
-      { kind: "column", field: "remark", header: "备注" }
+      { kind: "column", field: "remark", header: "备注" },
+      { kind: "regex", field: "externalCode", pattern: "(?:外部编码|配送单号|订单号|单据号|单号)\\s*(?:\\|\\s*\\[?\\d+\\]?\\s*|[:：\\s]+)([A-Za-z][A-Za-z0-9_-]{3,}|[0-9]{6,})", group: 1, scope: "document" },
+      { kind: "regex", field: "storeName", pattern: "(?:收货机构|收货门店|收货单位|门店)\\s*(?:\\|\\s*\\[?\\d+\\]?\\s*|[:：\\s]+)([^|\\n]+)", group: 1, scope: "document" },
+      { kind: "regex", field: "recipientName", pattern: "(?:收货人|收件人|联系人)\\s*(?:\\|\\s*\\[?\\d+\\]?\\s*|[:：\\s]+)([^|\\n\\s]+)", group: 1, scope: "tail" },
+      { kind: "regex", field: "recipientPhone", pattern: "(?:收货电话|电话|手机|联系方式)\\s*(?:\\|\\s*\\[?\\d+\\]?\\s*|[:：\\s]+)([0-9\\-\\s]{7,20})", group: 1, scope: "tail" },
+      { kind: "regex", field: "recipientAddress", pattern: "(?:收货地址|地址)\\s*(?:\\|\\s*\\[?\\d+\\]?\\s*|[:：\\s]+)([^|\\n]+)", group: 1, scope: "tail" }
     ]
   },
   {
@@ -41,10 +46,10 @@ export const DEFAULT_RULES: ParsingRule[] = [
     createdAt: now,
     updatedAt: now,
     confidence: 0.68,
-    assumptions: ["会遍历所有 Sheet。", "如果 Sheet 名不是门店，请删除 sheetName 映射。"],
+    assumptions: ["会遍历所有 Sheet。", "会在每个 Sheet 前 20 行扫描表头。", "如果 Sheet 名不是门店，请删除 sheetName 映射。"],
     sheetMode: "all",
-    headerRowIndex: 0,
-    dataStartRowIndex: 1,
+    autoDetectHeader: true,
+    headerSearchRows: 20,
     stopWhenRowMatches: "合计|总计|小计",
     skipRowPatterns: ["合计", "总计", "小计", "^\\s*$"],
     mappings: [
@@ -57,7 +62,10 @@ export const DEFAULT_RULES: ParsingRule[] = [
       { kind: "column", field: "skuName", header: "名称" },
       { kind: "column", field: "skuQuantity", header: "数量" },
       { kind: "column", field: "skuSpec", header: "规格" },
-      { kind: "column", field: "remark", header: "备注" }
+      { kind: "column", field: "remark", header: "备注" },
+      { kind: "regex", field: "recipientName", pattern: "(?:收货人|收件人|联系人)\\s*(?:\\|\\s*\\[?\\d+\\]?\\s*|[:：\\s]+)([^|\\n\\s]+)", group: 1, scope: "tail" },
+      { kind: "regex", field: "recipientPhone", pattern: "(?:收货电话|电话|手机|联系方式)\\s*(?:\\|\\s*\\[?\\d+\\]?\\s*|[:：\\s]+)([0-9\\-\\s]{7,20})", group: 1, scope: "tail" },
+      { kind: "regex", field: "recipientAddress", pattern: "(?:收货地址|地址)\\s*(?:\\|\\s*\\[?\\d+\\]?\\s*|[:：\\s]+)([^|\\n]+)", group: 1, scope: "tail" }
     ]
   },
   {

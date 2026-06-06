@@ -1,5 +1,6 @@
 import fs from "node:fs";
 import path from "node:path";
+import JSZip from "jszip";
 import XLSX from "xlsx";
 
 const baseUrl = process.env.SMOKE_BASE_URL || "http://127.0.0.1:3000";
@@ -65,6 +66,132 @@ async function checkDefaultRules() {
   return data.rules;
 }
 
+async function checkRuleCrud() {
+  const id = `smoke_rule_${Date.now()}`;
+  const now = new Date().toISOString();
+  const rule = {
+    id,
+    name: "SMOKE temporary rule",
+    description: "Temporary rule created by smoke test",
+    sourceKind: "excel",
+    layout: "tabular",
+    createdAt: now,
+    updatedAt: now,
+    headerRowIndex: 0,
+    dataStartRowIndex: 1,
+    mappings: [
+      { kind: "column", field: "externalCode", columnIndex: 0 },
+      { kind: "column", field: "storeName", columnIndex: 1 },
+      { kind: "column", field: "skuCode", columnIndex: 5 },
+      { kind: "column", field: "skuName", columnIndex: 6 },
+      { kind: "column", field: "skuQuantity", columnIndex: 7 }
+    ]
+  };
+
+  try {
+    const createResponse = await fetch(`${baseUrl}/api/rules`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(rule)
+    });
+    const created = await readJson(createResponse);
+    assert(createResponse.ok, "Rule create API failed");
+    assert(created.rule?.id === id, "Created rule id mismatch");
+
+    const listAfterCreateResponse = await fetch(`${baseUrl}/api/rules`, { cache: "no-store" });
+    const listAfterCreate = await readJson(listAfterCreateResponse);
+    assert(listAfterCreateResponse.ok, "Rule list after create failed");
+    assert((listAfterCreate.rules || []).some((item) => item.id === id), "Created rule was not listed");
+
+    const updateResponse = await fetch(`${baseUrl}/api/rules`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...rule, name: "SMOKE temporary rule updated" })
+    });
+    const updated = await readJson(updateResponse);
+    assert(updateResponse.ok, "Rule update API failed");
+    assert(updated.rule?.name === "SMOKE temporary rule updated", "Updated rule name mismatch");
+  } finally {
+    await fetch(`${baseUrl}/api/rules?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  const listAfterDeleteResponse = await fetch(`${baseUrl}/api/rules`, { cache: "no-store" });
+  const listAfterDelete = await readJson(listAfterDeleteResponse);
+  assert(listAfterDeleteResponse.ok, "Rule list after delete failed");
+  assert(!(listAfterDelete.rules || []).some((item) => item.id === id), "Temporary rule was not deleted");
+
+  return {
+    id,
+    created: true,
+    updated: true,
+    deleted: true
+  };
+}
+
+async function checkLlmProfileCrud() {
+  const id = `smoke_profile_${Date.now()}`;
+  const now = new Date().toISOString();
+  const profile = {
+    id,
+    name: "SMOKE temporary profile",
+    protocol: "openai-compatible",
+    baseUrl: "https://example.invalid/v1",
+    model: "smoke-model",
+    apiKey: "smoke-test-key-not-real",
+    temperature: 0,
+    timeoutMs: 1000,
+    enabled: false,
+    createdAt: now,
+    updatedAt: now
+  };
+
+  try {
+    const createResponse = await fetch(`${baseUrl}/api/llm-profiles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(profile)
+    });
+    const created = await readJson(createResponse);
+    assert(createResponse.ok, "LLM profile create API failed");
+    assert(created.profile?.id === id, "Created profile id mismatch");
+    assert(created.profile?.hasApiKey === true, "Created profile did not report saved key");
+    assert(!("apiKey" in (created.profile || {})), "Profile API leaked apiKey on create");
+
+    const listAfterCreateResponse = await fetch(`${baseUrl}/api/llm-profiles`, { cache: "no-store" });
+    const listAfterCreate = await readJson(listAfterCreateResponse);
+    const listed = (listAfterCreate.profiles || []).find((item) => item.id === id);
+    assert(listAfterCreateResponse.ok, "LLM profile list after create failed");
+    assert(listed, "Created profile was not listed");
+    assert(!("apiKey" in listed), "Profile list leaked apiKey");
+
+    const updateResponse = await fetch(`${baseUrl}/api/llm-profiles`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...profile, name: "SMOKE temporary profile updated", apiKey: "", keepExistingKey: true })
+    });
+    const updated = await readJson(updateResponse);
+    assert(updateResponse.ok, "LLM profile update API failed");
+    assert(updated.profile?.name === "SMOKE temporary profile updated", "Updated profile name mismatch");
+    assert(updated.profile?.hasApiKey === true, "Profile update did not keep existing key");
+    assert(!("apiKey" in (updated.profile || {})), "Profile API leaked apiKey on update");
+  } finally {
+    await fetch(`${baseUrl}/api/llm-profiles?id=${encodeURIComponent(id)}`, { method: "DELETE" });
+  }
+
+  const listAfterDeleteResponse = await fetch(`${baseUrl}/api/llm-profiles`, { cache: "no-store" });
+  const listAfterDelete = await readJson(listAfterDeleteResponse);
+  assert(listAfterDeleteResponse.ok, "LLM profile list after delete failed");
+  assert(!(listAfterDelete.profiles || []).some((item) => item.id === id), "Temporary LLM profile was not deleted");
+
+  return {
+    id,
+    created: true,
+    updated: true,
+    deleted: true,
+    apiKeyHidden: true
+  };
+}
+
 async function checkDemoParsing() {
   const demosDir = path.join(process.cwd(), "demos");
   const files = fs.existsSync(demosDir)
@@ -94,6 +221,74 @@ async function checkDemoParsing() {
     });
   }
   return results;
+}
+
+async function checkStandardRuleWithNoisyHeader(defaultRules) {
+  const rule = defaultRules.find((item) => item.id === "template_tabular_standard");
+  assert(rule, "Standard tabular default rule is missing");
+  const demosDir = path.join(process.cwd(), "demos");
+  const files = fs.readdirSync(demosDir).filter((item) => /\.(xlsx|xls)$/i.test(item) && !item.startsWith("~$"));
+  assert(files.length > 0, "No Excel demo found for standard rule check");
+
+  let matched;
+  for (const candidate of files) {
+    const parsed = await postFile("/api/parse", path.join(demosDir, candidate), {
+      rule: JSON.stringify(rule)
+    });
+    assert(parsed.response.ok, `Standard tabular rule parse API failed for ${candidate}`);
+    const rows = parsed.data.result?.rows || [];
+    const issues = parsed.data.result?.issues || [];
+    const hasTailRecipient = rows.length > 0 && rows.every((row) => row.recipientPhone && row.recipientAddress);
+    const hasSharedExternalCode = rows.length > 1 && rows.every((row) => row.externalCode === rows[0].externalCode);
+    if (issues.length === 0 && hasTailRecipient && hasSharedExternalCode) {
+      matched = { file: candidate, rows, issues };
+      break;
+    }
+  }
+
+  assert(matched, "Standard rule did not parse any demo with shared external code and tail recipient info");
+  const rows = matched.rows;
+  assert(rows.every((row) => row.skuCode && row.skuName && row.skuQuantity > 0), "Standard rule produced incomplete SKU rows");
+  return {
+    file: matched.file,
+    rows: rows.length,
+    externalCode: rows[0]?.externalCode,
+    recipientPhone: rows[0]?.recipientPhone
+  };
+}
+
+async function checkEmptyParseIssue() {
+  const demosDir = path.join(process.cwd(), "demos");
+  const file = fs.readdirSync(demosDir).find((item) => /\.(xlsx|xls)$/i.test(item) && !item.startsWith("~$"));
+  assert(file, "No Excel demo file found for empty parse check");
+  const badRule = {
+    id: "smoke_bad_empty_rule",
+    name: "Smoke bad empty rule",
+    sourceKind: "excel",
+    layout: "tabular",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    headerRowIndex: 0,
+    dataStartRowIndex: 1,
+    dataEndRowIndex: 2,
+    mappings: [
+      { kind: "column", field: "skuCode", columnIndex: 80 },
+      { kind: "column", field: "skuName", columnIndex: 81 },
+      { kind: "column", field: "skuQuantity", columnIndex: 82 }
+    ]
+  };
+  const parsed = await postFile("/api/parse", path.join(demosDir, file), {
+    rule: JSON.stringify(badRule)
+  });
+  const issueIds = (parsed.data.result?.issues || []).map((issue) => issue.id);
+  assert(parsed.response.ok, "Empty parse check API failed");
+  assert(parsed.data.result?.rows?.length === 0, "Bad rule unexpectedly parsed rows");
+  assert(issueIds.includes("parse_empty_result"), "Empty parse did not report parse_empty_result");
+  return {
+    file,
+    rows: parsed.data.result.rows.length,
+    issueIds
+  };
 }
 
 function createPerfWorkbook(rowCount) {
@@ -138,6 +333,46 @@ function workbookBuffer(sheets) {
   return XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
 }
 
+function escapeXml(value) {
+  return String(value)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&apos;");
+}
+
+async function docxBuffer(lines) {
+  const zip = new JSZip();
+  zip.file(
+    "[Content_Types].xml",
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">
+  <Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/>
+  <Default Extension="xml" ContentType="application/xml"/>
+  <Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>
+</Types>`
+  );
+  zip.folder("_rels").file(
+    ".rels",
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">
+  <Relationship Id="rId1" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/officeDocument" Target="word/document.xml"/>
+</Relationships>`
+  );
+  zip.folder("word").file(
+    "document.xml",
+    `<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<w:document xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main">
+  <w:body>
+    ${lines.map((line) => `<w:p><w:r><w:t>${escapeXml(line)}</w:t></w:r></w:p>`).join("\n    ")}
+    <w:sectPr><w:pgSz w:w="11906" w:h="16838"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440"/></w:sectPr>
+  </w:body>
+</w:document>`
+  );
+  return zip.generateAsync({ type: "nodebuffer", compression: "DEFLATE" });
+}
+
 async function parseSyntheticWorkbook(fileName, rowsOrSheets, rule) {
   const sheets = Array.isArray(rowsOrSheets[0]?.rows) ? rowsOrSheets : [{ name: "ImportData", rows: rowsOrSheets }];
   const buffer = workbookBuffer(sheets);
@@ -149,6 +384,18 @@ async function parseSyntheticWorkbook(fileName, rowsOrSheets, rule) {
     { rule: JSON.stringify(rule) }
   );
   assert(parsed.response.ok, `Synthetic parse failed for ${fileName}`);
+  return parsed.data.result;
+}
+
+async function parseSyntheticDocx(fileName, lines, rule) {
+  const parsed = await postBuffer(
+    "/api/parse",
+    fileName,
+    await docxBuffer(lines),
+    "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    { rule: JSON.stringify(rule) }
+  );
+  assert(parsed.response.ok, `Synthetic DOCX parse failed for ${fileName}`);
   return parsed.data.result;
 }
 
@@ -233,6 +480,94 @@ async function checkSyntheticComplexFormats(defaultRules) {
   };
 }
 
+async function checkSyntheticWordAndMultiOrderText() {
+  const textRule = {
+    id: "smoke_word_text_rule",
+    name: "Smoke Word pure text rule",
+    sourceKind: "word",
+    layout: "textBlocks",
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    sectionSeparatorPattern: "\\n\\s*\\n",
+    itemLinePattern: "(?:\\d+[\\.]\\s*)?([A-Za-z0-9_-]{2,})\\s*\\|\\s*([^|\\n]+?)\\s*\\|\\s*([^|\\n]+?)\\s*\\|\\s*(\\d+(?:\\.\\d+)?)",
+    mappings: [
+      { kind: "regex", field: "externalCode", pattern: "(?:Order No|Order)[:\\s]*([A-Za-z0-9_-]+)", group: 1, scope: "document" },
+      { kind: "regex", field: "storeName", pattern: "Store[:\\s]*([^\\n]+)", group: 1, scope: "document" },
+      { kind: "regex", field: "recipientName", pattern: "Receiver[:\\s]*([^\\n]+)", group: 1, scope: "document" },
+      { kind: "regex", field: "recipientPhone", pattern: "Phone[:\\s]*([0-9\\-\\s]{7,20})", group: 1, scope: "document" },
+      { kind: "regex", field: "recipientAddress", pattern: "Address[:\\s]*([^\\n]+)", group: 1, scope: "document" }
+    ]
+  };
+
+  const wordResult = await parseSyntheticDocx(
+    "synthetic-word-text.docx",
+    [
+      "Order No: WORD-001",
+      "Store: Alpha Store",
+      "Receiver: Alice",
+      "Phone: 13812345678",
+      "Address: Alpha Road 1",
+      "1. SKU-WORD-1 | Tomato | 500g | 2",
+      "2. SKU-WORD-2 | Potato | 1kg | 3"
+    ],
+    textRule
+  );
+  assert(wordResult.rows.length === 2, `Expected 2 Word text rows, got ${wordResult.rows.length}`);
+  assert(wordResult.groups.length === 1, `Expected 1 Word text order, got ${wordResult.groups.length}`);
+  assert(wordResult.issues.length === 0, `Expected no Word text issues, got ${wordResult.issues.length}`);
+
+  const multiOrderRule = {
+    ...textRule,
+    id: "smoke_multi_order_text_rule",
+    name: "Smoke multi-order text rule",
+    layout: "multiSection",
+    sectionStartPattern: "Delivery Order",
+    mappings: [
+      { kind: "regex", field: "externalCode", pattern: "Delivery Order[:\\s]*([A-Za-z0-9_-]+)", group: 1, scope: "section" },
+      { kind: "regex", field: "storeName", pattern: "Store[:\\s]*([^\\n]+)", group: 1, scope: "section" },
+      { kind: "regex", field: "recipientName", pattern: "Receiver[:\\s]*([^\\n]+)", group: 1, scope: "section" },
+      { kind: "regex", field: "recipientPhone", pattern: "Phone[:\\s]*([0-9\\-\\s]{7,20})", group: 1, scope: "section" },
+      { kind: "regex", field: "recipientAddress", pattern: "Address[:\\s]*([^\\n]+)", group: 1, scope: "section" }
+    ]
+  };
+  const multiOrderResult = await parseSyntheticDocx(
+    "synthetic-multi-order-text.docx",
+    [
+      "Delivery Order: TXT-001",
+      "Store: North Store",
+      "Receiver: Bob",
+      "Phone: 13912345678",
+      "Address: North Road",
+      "1. SKU-MULTI-1 | Apple | box | 2",
+      "2. SKU-MULTI-2 | Pear | box | 1",
+      "-----",
+      "Delivery Order: TXT-002",
+      "Store: South Store",
+      "Receiver: Cindy",
+      "Phone: 13712345678",
+      "Address: South Road",
+      "1. SKU-MULTI-3 | Banana | bag | 4"
+    ],
+    multiOrderRule
+  );
+  assert(multiOrderResult.rows.length === 3, `Expected 3 multi-order text rows, got ${multiOrderResult.rows.length}`);
+  assert(multiOrderResult.groups.length === 2, `Expected 2 multi-order text orders, got ${multiOrderResult.groups.length}`);
+  assert(multiOrderResult.issues.length === 0, `Expected no multi-order text issues, got ${multiOrderResult.issues.length}`);
+
+  return {
+    wordPureText: {
+      rows: wordResult.rows.length,
+      groups: wordResult.groups.length,
+      sample: wordResult.rows.map((row) => `${row.externalCode}:${row.skuCode}:${row.skuQuantity}`)
+    },
+    multiOrderText: {
+      rows: multiOrderResult.rows.length,
+      groups: multiOrderResult.groups.length,
+      orders: multiOrderResult.groups.map((group) => group.externalCode)
+    }
+  };
+}
+
 async function checkPerformance() {
   const buffer = createPerfWorkbook(1000);
   const blob = new Blob([buffer], {
@@ -311,11 +646,58 @@ async function checkSubmitAndHistory() {
   assert(historyResponse.ok, "History API failed");
   assert(history.total >= 1, "Submitted order not found in history");
 
+  const duplicateHistoryResponse = await fetch(`${baseUrl}/api/orders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rows })
+  });
+  const duplicateHistory = await readJson(duplicateHistoryResponse);
+  assert(!duplicateHistoryResponse.ok, "Historical external-code duplicate was accepted");
+  assert(
+    (duplicateHistory.issues || []).some((issue) => String(issue.id || "").includes("external_duplicate_existing")),
+    "Historical external-code duplicate was not reported"
+  );
+
+  const batchConflictCode = `${externalCode}-BATCH`;
+  const batchConflictRows = [
+    {
+      id: `${batchConflictCode}-1`,
+      rowNumber: 1,
+      externalCode: batchConflictCode,
+      storeName: "Smoke Store",
+      skuCode: "SKU-BATCH-1",
+      skuName: "Smoke Batch Item 1",
+      skuQuantity: 1
+    },
+    {
+      id: `${batchConflictCode}-2`,
+      rowNumber: 2,
+      externalCode: batchConflictCode,
+      storeName: "Smoke Store",
+      skuCode: "SKU-BATCH-1",
+      skuName: "Smoke Batch Item 1 Duplicate",
+      skuQuantity: 1
+    }
+  ];
+  const batchConflictResponse = await fetch(`${baseUrl}/api/orders`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ rows: batchConflictRows })
+  });
+  const batchConflict = await readJson(batchConflictResponse);
+  assert(!batchConflictResponse.ok, "Batch external-code conflict was accepted");
+  assert(
+    (batchConflict.issues || []).some((issue) => String(issue.id || "").includes("external_duplicate_batch")),
+    "Batch external-code conflict was not reported"
+  );
+
   return {
     externalCode,
     successCount: submitted.successCount,
     failureCount: submitted.failureCount,
-    historyTotal: history.total
+    historyTotal: history.total,
+    historicalDuplicateRejected: true,
+    batchDuplicateRejected: true
   };
 }
 
@@ -358,8 +740,13 @@ async function main() {
     serverStatus: await checkServer(),
     health: await checkHealth(),
     defaultRules: defaultRules.map((rule) => rule.name),
+    ruleCrud: await checkRuleCrud(),
+    llmProfileCrud: await checkLlmProfileCrud(),
     demoParsing: await checkDemoParsing(),
+    standardRuleNoisyHeader: await checkStandardRuleWithNoisyHeader(defaultRules),
+    emptyParseIssue: await checkEmptyParseIssue(),
     syntheticComplexFormats: await checkSyntheticComplexFormats(defaultRules),
+    syntheticWordAndMultiOrderText: await checkSyntheticWordAndMultiOrderText(),
     performance: await checkPerformance(),
     export: await checkExport(),
     submitAndHistory: await checkSubmitAndHistory()

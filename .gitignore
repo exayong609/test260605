@@ -12,5 +12,10 @@ data/*.png
 tsconfig.tsbuildinfo
 .vercel
 .DS_Store
-AI考试附件/
+.playwright-mcp/
+main-ui-*.png
+model-profile-modal.png
+ui-*.png
 ~$*
+AI考试附件/
+AI考试附件.zip

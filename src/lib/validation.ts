@@ -5,16 +5,41 @@ function isBlank(value: unknown) {
   return value === undefined || value === null || String(value).trim() === "";
 }
 
+function normalizeKeyPart(value: unknown) {
+  return String(value ?? "").replace(/\s+/g, "").trim();
+}
+
+function orderKey(row: ParsedOrderRow) {
+  const externalCode = normalizeKeyPart(row.externalCode);
+  if (!externalCode) {
+    const destinationKey = destinationSignature(row);
+    return destinationKey || `order_${row.rowNumber}`;
+  }
+  const destinationKey = destinationSignature(row);
+  return destinationKey ? `${externalCode}::${destinationKey}` : externalCode;
+}
+
+function destinationSignature(row: ParsedOrderRow) {
+  const storeName = normalizeKeyPart(row.storeName);
+  if (storeName) return `store:${storeName}`;
+  const recipient = [
+    normalizeKeyPart(row.recipientName),
+    normalizeKeyPart(row.recipientPhone),
+    normalizeKeyPart(row.recipientAddress)
+  ].filter(Boolean).join("|");
+  return recipient ? `recipient:${recipient}` : "";
+}
+
 export function groupRows(rows: ParsedOrderRow[]): OrderGroup[] {
   const buckets = new Map<string, OrderGroup>();
 
   rows.forEach((row) => {
-    const key = row.externalCode?.trim() || `${row.storeName || row.recipientPhone || "order"}_${row.rowNumber}`;
+    const key = orderKey(row);
     const existing = buckets.get(key);
     const skuLine = {
       skuCode: row.skuCode,
       skuName: row.skuName,
-      skuQuantity: row.skuQuantity,
+      skuQuantity: Number(row.skuQuantity),
       skuSpec: row.skuSpec,
       remark: row.remark
     };
@@ -48,8 +73,9 @@ export function groupRows(rows: ParsedOrderRow[]): OrderGroup[] {
 
 export function validateRows(rows: ParsedOrderRow[], existingExternalCodes: string[] = []): ValidationIssue[] {
   const issues: ValidationIssue[] = [];
-  const seen = new Map<string, ParsedOrderRow>();
   const existing = new Set(existingExternalCodes.filter(Boolean));
+  const reportedExisting = new Set<string>();
+  const batchLineKeys = new Map<string, number>();
 
   rows.forEach((row) => {
     (["skuCode", "skuName", "skuQuantity"] as const).forEach((field) => {
@@ -100,31 +126,38 @@ export function validateRows(rows: ParsedOrderRow[], existingExternalCodes: stri
       });
     }
 
-    if (row.externalCode) {
-      const prev = seen.get(row.externalCode);
-      if (prev) {
+    const externalCode = row.externalCode?.trim();
+    if (externalCode) {
+      const lineKey = [
+        normalizeKeyPart(externalCode),
+        destinationSignature(row),
+        normalizeKeyPart(row.skuCode)
+      ].join("::");
+      const firstRowNumber = batchLineKeys.get(lineKey);
+      if (firstRowNumber !== undefined) {
         issues.push({
           id: `${row.id}_external_duplicate_batch`,
-          severity: "warning",
-          rowId: row.id,
-          rowNumber: row.rowNumber,
-          field: "externalCode",
-          message: `外部编码与第 ${prev.rowNumber} 行重复，将聚合为同一出库单`
-        });
-      } else {
-        seen.set(row.externalCode, row);
-      }
-
-      if (existing.has(row.externalCode)) {
-        issues.push({
-          id: `${row.id}_external_duplicate_existing`,
           severity: "error",
           rowId: row.id,
           rowNumber: row.rowNumber,
           field: "externalCode",
-          message: "外部编码与历史已导入数据重复"
+          message: `外部编码与本批次第 ${firstRowNumber} 行重复，且 SKU 明细重复`
         });
+      } else {
+        batchLineKeys.set(lineKey, row.rowNumber);
       }
+    }
+
+    if (externalCode && existing.has(externalCode) && !reportedExisting.has(externalCode)) {
+      reportedExisting.add(externalCode);
+      issues.push({
+        id: `${row.id}_external_duplicate_existing`,
+        severity: "error",
+        rowId: row.id,
+        rowNumber: row.rowNumber,
+        field: "externalCode",
+        message: "外部编码与历史已导入数据重复"
+      });
     }
   });
 

@@ -50,10 +50,13 @@ export type ParsingRule = {
   layout: "tabular" | "matrix" | "cards" | "textBlocks" | "multiSection";
   createdAt: string;
   updatedAt: string;
+  generationPrompt?: string;
   aiGenerated?: boolean;
   confidence?: number;
   assumptions?: string[];
   sheetMode?: "first" | "all";
+  autoDetectHeader?: boolean;
+  headerSearchRows?: number;
   headerRowIndex?: number;
   dataStartRowIndex?: number;
   dataEndRowIndex?: number;
@@ -74,10 +77,31 @@ export type ParsingRule = {
   mappings: FieldMapping[];
 };
 
+export type LlmProtocol = "openai-compatible" | "anthropic-compatible" | "minimax-native";
+
+export type LlmProfile = {
+  id: string;
+  name: string;
+  protocol: LlmProtocol;
+  baseUrl: string;
+  model: string;
+  apiKey: string;
+  temperature?: number;
+  timeoutMs?: number;
+  enabled?: boolean;
+  createdAt: string;
+  updatedAt: string;
+};
+
+export type LlmProfileView = Omit<LlmProfile, "apiKey"> & {
+  hasApiKey: boolean;
+  source?: "env" | "stored";
+};
+
 export type SkuLine = {
   skuCode: string;
   skuName: string;
-  skuQuantity: number;
+  skuQuantity: number | string;
   skuSpec?: string;
   remark?: string;
 };

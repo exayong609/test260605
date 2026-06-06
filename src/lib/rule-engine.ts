@@ -13,6 +13,43 @@ function normalize(value: unknown): string {
   return String(value ?? "").replace(/\s+/g, " ").trim();
 }
 
+function stripAfterBusinessLabel(value: unknown, labels: string[]) {
+  let clean = normalize(value);
+  labels.forEach((label) => {
+    const index = clean.indexOf(label);
+    if (index > 0) clean = clean.slice(0, index).trim();
+  });
+  return clean.replace(/[|,，;；:：\s]+$/, "").trim();
+}
+
+function sanitizeFieldValue(field: OrderField, value: unknown) {
+  if (field === "storeName") {
+    return stripAfterBusinessLabel(value, [
+      "订货机构",
+      "供货机构",
+      "送货机构",
+      "业务模式",
+      "配送重量",
+      "收货人",
+      "收货电话",
+      "电话",
+      "地址",
+      "联系人",
+      "联系电话"
+    ]);
+  }
+  if (field === "recipientName") {
+    return stripAfterBusinessLabel(value, ["收货电话", "联系电话", "电话", "手机", "联系方式", "收货地址", "地址"]);
+  }
+  if (field === "recipientPhone") {
+    return stripAfterBusinessLabel(value, ["收货地址", "地址", "门店", "收货机构", "备注"]);
+  }
+  if (field === "recipientAddress") {
+    return stripAfterBusinessLabel(value, ["备注", "制单", "打印", "合计", "签字"]);
+  }
+  return normalize(value);
+}
+
 function toNumber(value: unknown) {
   const match = String(value ?? "").match(/-?\d+(?:\.\d+)?/);
   return match ? Number(match[0]) : 0;
@@ -39,6 +76,37 @@ function findColumnByHeader(sheet: GridSheet, headerRowIndex: number, mapping: F
   const exactHintIndex = normalizedRow.findIndex((cell) => hints.some((hint) => cell === hint));
   if (exactHintIndex >= 0) return exactHintIndex;
   return normalizedRow.findIndex((cell) => hints.some((hint) => cell.includes(hint)));
+}
+
+function headerScore(sheet: GridSheet, rowIndex: number, mappings: FieldMapping[]) {
+  const requiredFields = new Set<OrderField>(["skuCode", "skuName", "skuQuantity"]);
+  const matched = new Set<OrderField>();
+  const row = sheet.rows[rowIndex] || [];
+  let score = 0;
+
+  mappings.forEach((mapping) => {
+    if (mapping.kind !== "column") return;
+    const columnIndex = findColumnByHeader(sheet, rowIndex, mapping);
+    if (columnIndex === undefined || columnIndex < 0) return;
+    matched.add(mapping.field);
+    score += requiredFields.has(mapping.field) ? 5 : 1;
+  });
+
+  const usefulCells = row.filter(Boolean).length;
+  return {
+    rowIndex,
+    score: score + Math.min(usefulCells, 12) * 0.1,
+    hasRequiredSku: [...requiredFields].every((field) => matched.has(field))
+  };
+}
+
+function resolveHeaderRowIndex(sheet: GridSheet, rule: ParsingRule) {
+  if (!rule.autoDetectHeader) return rule.headerRowIndex ?? 0;
+  const maxRows = Math.min(rule.headerSearchRows ?? 20, sheet.rows.length);
+  const candidates = Array.from({ length: maxRows }, (_, rowIndex) => headerScore(sheet, rowIndex, rule.mappings));
+  const complete = candidates.filter((candidate) => candidate.hasRequiredSku);
+  const best = (complete.length ? complete : candidates).sort((left, right) => right.score - left.score)[0];
+  return best?.score > 0 ? best.rowIndex : rule.headerRowIndex ?? 0;
 }
 
 function getRegexValue(mapping: Extract<FieldMapping, { kind: "regex" }>, documentText: string, sectionText?: string) {
@@ -68,14 +136,14 @@ function applyCommonMappings(
   mappings.forEach((mapping) => {
     if (mapping.kind === "column" && context.row && context.sheet && context.headerRowIndex !== undefined) {
       const index = findColumnByHeader(context.sheet, context.headerRowIndex, mapping);
-      if (index !== undefined && index >= 0) draft[mapping.field] = normalize(context.row[index] ?? mapping.fallback ?? draft[mapping.field]);
+      if (index !== undefined && index >= 0) draft[mapping.field] = sanitizeFieldValue(mapping.field, context.row[index] ?? mapping.fallback ?? draft[mapping.field]);
     }
     if (mapping.kind === "cell" && context.sheet) {
-      draft[mapping.field] = normalize(context.sheet.rows[mapping.rowIndex]?.[mapping.columnIndex] ?? mapping.fallback ?? draft[mapping.field]);
+      draft[mapping.field] = sanitizeFieldValue(mapping.field, context.sheet.rows[mapping.rowIndex]?.[mapping.columnIndex] ?? mapping.fallback ?? draft[mapping.field]);
     }
     if (mapping.kind === "regex") {
       const value = getRegexValue(mapping, context.documentText, context.sectionText);
-      if (value && !draft[mapping.field]) draft[mapping.field] = value;
+      if (value && !draft[mapping.field]) draft[mapping.field] = sanitizeFieldValue(mapping.field, value);
     }
     if (mapping.kind === "constant") {
       draft[mapping.field] = mapping.value;
@@ -127,7 +195,7 @@ function parseTabular(document: IntermediateDocument, rule: ParsingRule) {
   let outputRow = 1;
 
   sheets.forEach((sheet) => {
-    const headerRowIndex = rule.headerRowIndex ?? 0;
+    const headerRowIndex = resolveHeaderRowIndex(sheet, rule);
     const start = rule.dataStartRowIndex ?? headerRowIndex + 1;
     const end = rule.dataEndRowIndex ?? sheet.rows.length;
 
@@ -178,6 +246,14 @@ function stripDocumentLinePrefix(line: string) {
     .replace(/\s*\[\d+\]\s*/g, " ")
     .replace(/\s*\|\s*/g, " | ")
     .trim();
+}
+
+function isNonItemTextLine(line: string, rule: ParsingRule) {
+  if (!line) return true;
+  const cells = line.split(/\s*\|\s*/).map((cell) => cell.trim());
+  if (rowMatches(cells, rule.stopWhenRowMatches)) return true;
+  if ((rule.skipRowPatterns || []).some((pattern) => rowMatches(cells, pattern))) return true;
+  return /^(物品编码|物品名称|规格|数量|合计|总计|小计|调入门店|调出仓库|收货人|收货地址|电话|备注|制单|打印|审批状态)(\s|\||[:：]|$)/.test(line);
 }
 
 function splitTextSections(documentText: string, rule: ParsingRule) {
@@ -274,6 +350,7 @@ function parseTextBlocks(document: IntermediateDocument, rule: ParsingRule) {
     let foundItem = false;
     const itemLines = cleanedSection.split(/\n/).map((line) => line.trim()).filter(Boolean);
     itemLines.forEach((line) => {
+      if (isNonItemTextLine(line, rule)) return;
       const match = line.match(itemRegex);
       if (!match) return;
       foundItem = true;
@@ -294,6 +371,7 @@ function parseTextBlocks(document: IntermediateDocument, rule: ParsingRule) {
     if (!foundItem && /编码|名称|数量/.test(cleanedSection)) {
       const lines = cleanedSection.split(/\n/).map((line) => line.trim()).filter(Boolean);
       lines.forEach((line) => {
+        if (isNonItemTextLine(line, rule)) return;
         const fallback = line.match(/([A-Za-z0-9_-]{2,}).*?([\u4e00-\u9fa5A-Za-z][^0-9|｜]*).*?(\d+(?:\.\d+)?)/);
         if (!fallback) return;
         const draft: RowDraft = {

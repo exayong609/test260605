@@ -1,17 +1,18 @@
 import { NextResponse } from "next/server";
 import { DEFAULT_RULES } from "@/lib/default-rules";
-import { ensureSchema } from "@/lib/store";
+import { ensureSchema, listLlmProfileViews } from "@/lib/store";
 
 export const runtime = "nodejs";
 
 export async function GET() {
   try {
     await ensureSchema();
+    const profiles = await listLlmProfileViews();
     return NextResponse.json({
       ok: true,
       service: "universal-order-importer",
       storage: process.env.DATABASE_URL ? "database" : "local-json",
-      llmConfigured: Boolean(process.env.LLM_API_KEY),
+      llmConfigured: profiles.some((profile) => profile.enabled !== false && profile.hasApiKey),
       defaultRuleCount: DEFAULT_RULES.length,
       timestamp: new Date().toISOString()
     });

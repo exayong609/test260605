@@ -1,65 +1,67 @@
 # 部署与提交清单
 
-## 需要提供的信息
-
-部署到 Vercel 前需要以下信息：
-
-- Vercel 账号访问方式，或已经创建好的 Vercel 项目。
-- Git 远程仓库地址，GitHub / GitLab / GITEE 均可。
-- 数据库连接串 `DATABASE_URL`，建议通过 Vercel Marketplace 集成 Neon / Supabase / Turso。
-- 大模型密钥 `LLM_API_KEY`。
-- 大模型接口地址 `LLM_BASE_URL`，例如 `https://api.deepseek.com`。
-- 大模型名称 `LLM_MODEL`，例如 `deepseek-chat`。
-
-## Vercel 环境变量
+## 提交前本地验证
 
 ```bash
-DATABASE_URL=
-LLM_API_KEY=
-LLM_BASE_URL=https://api.deepseek.com
-LLM_MODEL=deepseek-chat
-NEXT_PUBLIC_DATABASE_LABEL=Vercel Marketplace DB
-```
-
-## 部署前本地验证
-
-```bash
-npm install
 npm run typecheck
 npm run lint
 npm run build
 ```
 
-启动服务后执行端到端烟测：
+启动本地服务后执行：
 
 ```bash
 npm run dev
 npm run smoke
 ```
 
-也可通过环境变量指定线上地址：
+线上也可以通过环境变量指定地址：
 
 ```bash
 SMOKE_BASE_URL=https://your-vercel-url.vercel.app npm run smoke
 ```
 
+## Vercel 环境变量
+
+必须配置：
+
+```bash
+DATABASE_URL=
+NEXT_PUBLIC_DATABASE_LABEL=Vercel Marketplace DB
+```
+
+如果使用环境变量作为默认模型配置，再配置：
+
+```bash
+LLM_API_KEY=
+LLM_BASE_URL=https://api.deepseek.com
+LLM_MODEL=deepseek-chat
+LLM_PROTOCOL=openai-compatible
+```
+
+如果使用页面里的“模型配置”维护 Profile，也需要确认部署后的数据库里已有可用 Profile，或上线后在页面中新增。
+
+MiniMax 原生 Profile 示例：
+
+```bash
+protocol=minimax-native
+baseUrl=https://api.minimaxi.com/v1/text/chatcompletion_v2
+model=MiniMax-M3
+```
+
 ## 部署后验收路径
 
-1. 打开 Vercel 在线 URL，确认首页正常加载。
-2. 访问 `/api/health`，确认 `ok: true`。
-3. 上传 Excel 样例，点击“新建规则”，确认能生成可编辑规则。
-4. 保存规则后点击“试解析”，确认预览表格有数据。
-5. 修改一个单元格，确认实时校验更新。
-6. 导出 Excel，确认下载文件可打开。
-7. 提交下单，确认成功 N 条、失败 0 条。
-8. 到“已导入运单”搜索外部编码，确认历史记录可查。
-9. 使用时间筛选和分页按钮，确认历史列表响应正常。
-
-## 考试提交内容
-
-- Vercel 在线地址。
-- 源码仓库链接。
-- 大模型调用说明：见 `README.md` 和 `docs/ai-and-rules.md`。
+1. 打开 Vercel URL，确认首页正常加载。
+2. 访问 `/api/health`，确认 `ok: true`、`storage: database`。
+3. 打开“模型配置”，确认 Profile 列表可查询，点击“测试连接”返回成功。
+4. 上传 demos 中的 Excel 文件，打开“规则配置”，点击 AI 生成规则。
+5. 查看规则 JSON、assumptions、解析预览，确认用户可以微调后保存。
+6. 回到主页点击“解析全部文件”，确认预览表格出现明细。
+7. 修改一个单元格，确认实时校验结果更新。
+8. 新增行、删除行、分页、横向滚动都能正常操作。
+9. 导出 Excel，确认文件可下载。
+10. 提交下单，确认成功记录写入数据库。
+11. 打开“已导入”，使用查询、重置、分页和查看详情。
 
 ## 当前本地验证记录
 
@@ -67,17 +69,15 @@ SMOKE_BASE_URL=https://your-vercel-url.vercel.app npm run smoke
 - `npm run lint`：通过。
 - `npm run build`：通过。
 - `npm run smoke`：通过。
-- 健康检查：`/api/health` 返回 `ok: true`，默认规则数量 6。
-- 导出烟测：`/api/export` 返回 `.xlsx` 文件。
-- 真实 demo 烟测：
-  - Excel 表格尾部收货信息：解析 2 行。
-  - Excel 多门店分 Sheet 出库单：解析 21 行。
-  - Excel 门店矩阵：解析 15 行。
-  - Excel 湖南仓汇总明细：解析 167 行。
-  - Excel 卡片式调拨单：解析 9 行。
-  - PDF 编号文本：解析 38 行。
-- 合成复杂格式烟测：
-  - 多 Sheet 表格：解析 2 行，Sheet 名映射为门店。
-  - 周计划双重转置：解析 4 行，复合单元格拆分正常。
-  - 卡片式调拨：解析 3 行，聚合为 2 个外部单号。
-- 1000 行标准 Excel：解析 1000 行，规则执行约 16ms，规则生成接口往返约 146ms，解析接口往返约 108ms。
+- MiniMax Profile 测试：通过。
+- MiniMax 小 Excel AI 生成规则：`provider=llm`，解析 2 行，0 个问题。
+- 真实 demos 6 个文件全部解析成功，0 个问题。
+- 真实 demos 带 MiniMax Profile 回归：5 个 `provider=llm`，1 个因少抽 1 行触发质量闸门 `provider=fallback`，最终全部 0 问题。
+- 1000 行标准 Excel：解析 1000 行，规则引擎约 15ms。
+
+## 提交材料
+
+- Vercel 在线地址。
+- GitHub 源码仓库地址。
+- 使用与场景配置说明：见 `docs/usage-guide.md`。
+- 大模型调用说明：见 `README.md`、`docs/ai-and-rules.md`、`docs/prompt-verification-report.md`。
